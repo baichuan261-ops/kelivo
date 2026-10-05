@@ -95,7 +95,10 @@ class DioHttpClient extends http.BaseClient {
           createHttpClient: () {
             final client = HttpClient();
             client.connectionTimeout = null;
-            client.idleTimeout = const Duration(days: 3650);
+            // Mobile VPNs and carrier networks can invalidate an otherwise
+            // cached TLS socket without notifying Dart. Do not retain idle
+            // connections longer than the server-side keep-alive window.
+            client.idleTimeout = const Duration(seconds: 30);
             if (_proxy?.isValid == true) {
               final p = _proxy!;
               if (p.type == 'socks5') {
@@ -176,6 +179,12 @@ class DioHttpClient extends http.BaseClient {
     final bodyBytes = await request.finalize().toBytes();
 
     final reqHeaders = Map<String, String>.from(request.headers);
+    if (uri.host.toLowerCase().endsWith('.onrender.com')) {
+      // Render connections often cross a VPN and a mobile carrier NAT. A
+      // connection that worked for the previous prompt may already be stale
+      // when the next prompt starts, so force a fresh socket for each request.
+      reqHeaders[HttpHeaders.connectionHeader] = 'close';
+    }
     if (!reqHeaders.keys.any((key) => key.toLowerCase() == 'user-agent')) {
       reqHeaders['User-Agent'] = 'Kelivo';
     }
