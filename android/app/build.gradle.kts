@@ -71,6 +71,11 @@ android {
         getByName("release") {
             if (keystorePropertiesFile.exists()) {
                 signingConfig = signingConfigs.getByName("release")
+            } else {
+                // Fork builds do not carry a private release keystore. A debug
+                // signature still produces a valid side-loadable APK while
+                // keeping the official Kelivo installation untouched.
+                signingConfig = signingConfigs.getByName("debug")
             }
         }
     }
