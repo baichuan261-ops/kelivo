@@ -117,6 +117,8 @@ jobs:
           echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> android/key.properties
           echo "✅ 签名配置已写入"
       - name: 🏗️ 构建 APK
+        env:
+          GENERATE_PROOT_CHECKSUMS: '1'
         run: flutter build apk --release --split-per-abi
 
       - name: 📦 重命名 APK
