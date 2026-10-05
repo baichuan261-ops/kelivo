@@ -27,6 +27,7 @@ import '../../../core/models/compress_context_options.dart';
 import '../../../core/services/android_process_text.dart';
 import '../../../core/services/incoming_share_service.dart';
 import '../../../core/services/logging/flutter_logger.dart';
+import '../../../core/services/proactive_message_sync.dart';
 import '../../../utils/platform_utils.dart';
 import '../../../desktop/search_provider_popover.dart';
 import '../../../desktop/reasoning_level_popover.dart';
@@ -719,6 +720,9 @@ class _HomePageState extends State<HomePage>
   late final Future<void> _chatReady;
   bool _readingIncomingShares = false;
   bool _incomingShareChanged = false;
+  final ProactiveMessageSync _proactiveMessageSync = ProactiveMessageSync();
+  bool _syncingProactiveMessages = false;
+  String? _lastProactiveConversationId;
 
   // ============================================================================
   // Page Controller (manages all business logic and state)
@@ -753,6 +757,7 @@ class _HomePageState extends State<HomePage>
     _drawerController.addListener(_onDrawerValueChanged);
 
     _chatReady = _controller.initChat();
+    unawaited(_chatReady.then((_) => _syncProactiveMessages()));
     _initProcessText();
     _initIncomingShares();
 
@@ -781,7 +786,10 @@ class _HomePageState extends State<HomePage>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _controller.onAppLifecycleStateChanged(state);
-    if (state == AppLifecycleState.resumed) _readIncomingShares();
+    if (state == AppLifecycleState.resumed) {
+      _readIncomingShares();
+      unawaited(_syncProactiveMessages());
+    }
   }
 
   @override
@@ -811,6 +819,7 @@ class _HomePageState extends State<HomePage>
     } catch (_) {}
     _processTextSub?.cancel();
     _incomingShares?.dispose();
+    _proactiveMessageSync.close();
     _controller.removeListener(_onControllerChanged);
     _drawerController.removeListener(_onDrawerValueChanged);
     _inputFocus.dispose();
@@ -823,6 +832,11 @@ class _HomePageState extends State<HomePage>
 
   void _onControllerChanged() {
     final conversationId = _controller.currentConversation?.id;
+    if (conversationId != null &&
+        conversationId != _lastProactiveConversationId) {
+      _lastProactiveConversationId = conversationId;
+      unawaited(_syncProactiveMessages());
+    }
     if (conversationId != null && conversationId != _scrollConversationId) {
       _scrollConversationId = conversationId;
       final previous = _scrollController;
@@ -832,6 +846,42 @@ class _HomePageState extends State<HomePage>
       WidgetsBinding.instance.addPostFrameCallback((_) => previous.dispose());
     }
     if (mounted) setState(() {});
+  }
+
+  Future<void> _syncProactiveMessages() async {
+    if (!mounted || _syncingProactiveMessages) return;
+    final conversation = _controller.currentConversation;
+    if (conversation == null) return;
+
+    final settings = context.read<SettingsProvider>();
+    final providerKey = _resolvedChatModel().providerKey;
+    if (providerKey == null) return;
+    final provider = settings.getProviderConfig(providerKey);
+
+    _syncingProactiveMessages = true;
+    try {
+      await _proactiveMessageSync.sync(
+        provider: provider,
+        insertMessage: (content) async {
+          if (!mounted ||
+              _controller.currentConversation?.id != conversation.id) {
+            throw StateError('Conversation changed during proactive sync');
+          }
+          await _controller.chatController.addMessage(
+            role: 'assistant',
+            content: content,
+            providerId: providerKey,
+          );
+        },
+      );
+    } catch (error, stackTrace) {
+      FlutterLogger.log(
+        '[ProactiveSync] $error\n$stackTrace',
+        tag: 'HomePage',
+      );
+    } finally {
+      _syncingProactiveMessages = false;
+    }
   }
 
   void _onDrawerValueChanged() {
